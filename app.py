@@ -19,25 +19,19 @@ def next_trading_day(dt):
         next_day += timedelta(days=1)
     return next_day
 
-def strip_tz(idx):
-    """Remove timezone from DatetimeIndex regardless of tz type."""
-    try:
-        return idx.tz_localize(None)
-    except TypeError:
-        return idx.tz_convert(None).tz_localize(None)
-
 def drop_incomplete_candle(df):
     """
-    yfinance sometimes includes today's still-open candle.
-    Drop it by keeping only rows where the date < today (UTC date).
+    yfinance daily data can include today's still-open candle.
+    Drop any rows whose date >= today (UTC, tz-naive comparison).
     """
     idx = df.index
-    if idx.tz is not None:
-        idx = strip_tz(idx)
-    today = pd.Timestamp.utcnow().normalize()
-    # Keep only strictly past trading days
-    mask = idx.normalize() < today
-    return df.loc[mask]
+    # Strip timezone if present so we can compare with tz-naive today
+    if hasattr(idx, 'tz') and idx.tz is not None:
+        idx = idx.tz_localize(None)
+    # tz-naive today in UTC
+    today = pd.Timestamp(datetime.utcnow().date())
+    normalized = idx.normalize()
+    return df.loc[normalized < today]
 
 def get_latest_features():
     import yfinance as yf
@@ -53,7 +47,6 @@ def get_latest_features():
         if isinstance(frame.columns, pd.MultiIndex):
             frame.columns = frame.columns.get_level_values(0)
 
-    # Drop incomplete (today's intraday) candle from all three
     qqq = drop_incomplete_candle(qqq)
     spy = drop_incomplete_candle(spy)
     vix = drop_incomplete_candle(vix)
@@ -98,9 +91,7 @@ def get_latest_features():
         raise ValueError("DataFrame empty after dropna. Check yfinance data.")
 
     row             = df[FEATURES].iloc[-1]
-    last_close_date = df.index[-1]
-    if hasattr(last_close_date, 'to_pydatetime'):
-        last_close_date = last_close_date.to_pydatetime()
+    last_close_date = df.index[-1].to_pydatetime()
     prediction_date = next_trading_day(last_close_date).strftime("%Y-%m-%d")
     return row.to_dict(), prediction_date
 
@@ -125,7 +116,7 @@ def debug():
             "qqq_filtered_rows": len(qqq_filtered),
             "qqq_last_raw":      str(qqq_raw.index[-1]),
             "qqq_last_filtered": str(qqq_filtered.index[-1]) if len(qqq_filtered) else "EMPTY",
-            "utc_now":           str(pd.Timestamp.utcnow()),
+            "utc_today":         str(pd.Timestamp(datetime.utcnow().date())),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -135,9 +126,9 @@ def debug():
 def signal():
     try:
         features, date = get_latest_features()
-        X      = np.array([[features[f] for f in FEATURES]])
-        proba  = float(model.predict_proba(X)[0][1])
-        sig    = "LONG" if proba > 0.52 else ("SHORT" if proba < 0.48 else "NEUTRAL")
+        X     = np.array([[features[f] for f in FEATURES]])
+        proba = float(model.predict_proba(X)[0][1])
+        sig   = "LONG" if proba > 0.52 else ("SHORT" if proba < 0.48 else "NEUTRAL")
         return jsonify({
             "date":       date,
             "signal":     sig,
@@ -152,9 +143,9 @@ def signal():
 def webhook():
     try:
         features, date = get_latest_features()
-        X      = np.array([[features[f] for f in FEATURES]])
-        proba  = float(model.predict_proba(X)[0][1])
-        sig    = "LONG" if proba > 0.52 else ("SHORT" if proba < 0.48 else "NEUTRAL")
+        X     = np.array([[features[f] for f in FEATURES]])
+        proba = float(model.predict_proba(X)[0][1])
+        sig   = "LONG" if proba > 0.52 else ("SHORT" if proba < 0.48 else "NEUTRAL")
         print(f"📡 {date} | {sig} | conf: {proba:.2%}")
         return jsonify({"signal": sig, "confidence": round(proba, 4), "date": date})
     except Exception as e:
