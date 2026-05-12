@@ -19,6 +19,21 @@ def next_trading_day(dt):
         next_day += timedelta(days=1)
     return next_day
 
+def drop_incomplete_candle(df):
+    """
+    yfinance daily interval includes today's intraday (not yet closed) candle.
+    If the last row's date is today (UTC), drop it — it has incomplete OHLCV data
+    which causes NaN propagation and eventual iloc[-1] out-of-bounds after dropna().
+    """
+    today_utc = pd.Timestamp.utcnow().normalize().tz_localize(None)
+    last_date = df.index[-1]
+    if hasattr(last_date, 'tz_localize'):
+        last_date = last_date.tz_localize(None) if last_date.tzinfo else last_date
+    last_date = last_date.normalize() if hasattr(last_date, 'normalize') else pd.Timestamp(last_date).normalize()
+    if last_date >= today_utc:
+        df = df.iloc[:-1]
+    return df
+
 def get_latest_features():
     """Alpaca helyett yfinance — nem kell API kulcs a szerveren"""
     import yfinance as yf
@@ -32,6 +47,11 @@ def get_latest_features():
     for df in [qqq, spy, vix]:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+
+    # Drop incomplete intraday candle before any calculation
+    qqq = drop_incomplete_candle(qqq)
+    spy = drop_incomplete_candle(spy)
+    vix = drop_incomplete_candle(vix)
 
     df = qqq.copy()
     for n in [1,2,3,5,10,20]:
@@ -65,9 +85,13 @@ def get_latest_features():
     df["dow"]      = df.index.dayofweek
 
     df.dropna(inplace=True)
+
+    if df.empty:
+        raise ValueError("DataFrame is empty after dropna — not enough historical data.")
+
     row = df[FEATURES].iloc[-1]
 
-    # Fix: return the NEXT trading day as the prediction target date
+    # Return the NEXT trading day as the prediction target date
     prediction_date = next_trading_day(df.index[-1]).strftime("%Y-%m-%d")
     return row.to_dict(), prediction_date
 
