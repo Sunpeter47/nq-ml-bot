@@ -12,6 +12,13 @@ FEATURES = [
     "vol_z","vwap_dev","qqq_spy","vix","vix_ratio","dow"
 ]
 
+def next_trading_day(dt):
+    """Returns the next business day after dt (skips weekends, no holiday check)."""
+    next_day = dt + timedelta(days=1)
+    while next_day.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        next_day += timedelta(days=1)
+    return next_day
+
 def get_latest_features():
     """Alpaca helyett yfinance — nem kell API kulcs a szerveren"""
     import yfinance as yf
@@ -59,7 +66,10 @@ def get_latest_features():
 
     df.dropna(inplace=True)
     row = df[FEATURES].iloc[-1]
-    return row.to_dict(), df.index[-1].strftime("%Y-%m-%d")
+
+    # Fix: return the NEXT trading day as the prediction target date
+    prediction_date = next_trading_day(df.index[-1]).strftime("%Y-%m-%d")
+    return row.to_dict(), prediction_date
 
 @app.route("/", methods=["GET"])
 def health():
